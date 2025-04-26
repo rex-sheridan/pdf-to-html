@@ -10,6 +10,92 @@ import sys
 from bs4 import BeautifulSoup
 import re
 
+def is_valid_single_letter(text):
+    """
+    Check if a single letter is a valid standalone word.
+    """
+    valid_singles = {'A', 'I', 'O'}  # Common valid single-letter words in English
+    return text.strip() in valid_singles
+
+def should_join_letter_with_word(current_text, next_text):
+    """
+    Determine if a single letter should be joined with the next word.
+    Example: "B y" should become "By", but "I am" should stay as is.
+    Also handles cases where a letter is followed by a space in the same paragraph.
+    """
+    current_text = current_text.strip()
+    next_text = next_text.strip()
+    
+    print(f"\nChecking letter join for: '{current_text}' + '{next_text}'")
+    
+    # Common word patterns to check against
+    common_word_starts = [
+        'By', 'Be', 'So', 'To', 'The', 'This', 'That', 'These', 'Those',
+        'She', 'Some', 'Such', 'Since', 'Say', 'See', 'Said', 'Saw',
+        'Stoicism', 'There', 'They', 'Then', 'Think', 'Thought',
+        'When', 'Where', 'Which', 'While', 'Who', 'Whose', 'Whom',
+        'What', 'Why', 'Will', 'Would', 'Were', 'With'
+    ]
+    
+    # Check if current text is a sequence of single letters with spaces
+    if re.match(r'^[A-Z](\s+[a-z])*$', current_text):
+        # Join all letters together
+        letters = ''.join(current_text.split())
+        
+        # Check if it forms a common word
+        matches = [word for word in common_word_starts if letters.startswith(word)]
+        if matches:
+            print(f"  Joining: Split letters form word {matches[0]}")
+            return True, letters
+    
+    # Check if current text starts with a single capital letter followed by space
+    if re.match(r'^[A-Z]\s+\w', current_text):
+        first_letter = current_text[0]
+        rest_of_text = current_text[1:].lstrip()
+        
+        # Don't join if it's a valid single-letter word
+        if is_valid_single_letter(first_letter):
+            print("  Not joining: First letter is a valid single letter word")
+            return False
+            
+        # Check if combining would form a common word
+        combined = first_letter + rest_of_text
+        
+        matches = [word for word in common_word_starts if combined.startswith(word)]
+        if matches:
+            print(f"  Joining: Split word matches pattern {matches[0]}")
+            # Return the combined text to be used
+            return True, combined
+        
+        print("  Not joining: No matching word pattern for split word")
+        return False
+    
+    # Original logic for separate paragraph cases
+    if len(current_text) != 1 or not current_text.isupper():
+        print("  Not joining: Current text is not a single capital letter")
+        return False
+    
+    # Don't join if it's a valid single-letter word
+    if is_valid_single_letter(current_text):
+        print("  Not joining: Current text is a valid single letter word")
+        return False
+    
+    # Check if next text starts with a lowercase letter
+    if not next_text or not next_text[0].islower():
+        print("  Not joining: Next text doesn't start with lowercase")
+        return False
+    
+    # Check common word patterns when joined
+    combined = current_text + next_text
+    
+    matches = [word for word in common_word_starts if combined.startswith(word)]
+    if matches:
+        print(f"  Joining: Matches pattern {matches[0]}")
+        return True
+    else:
+        print("  Not joining: No matching word pattern")
+        return False
+
 def is_attribution_line(text):
     """
     Check if the text appears to be an attribution line (author, source, etc.)
@@ -29,6 +115,10 @@ def should_combine_paragraphs(current_text, next_text):
     
     current_text = current_text.strip()
     next_text = next_text.strip()
+    
+    # Check for single letter that should be joined with next word
+    if should_join_letter_with_word(current_text, next_text):
+        return True
     
     # Don't combine if next text is an attribution line
     if is_attribution_line(next_text):
@@ -66,40 +156,64 @@ def should_combine_paragraphs(current_text, next_text):
 def fix_paragraphs(html_content):
     """
     Process HTML content to combine paragraphs where appropriate.
+    Returns the modified HTML content.
     """
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Process each page section
-    for page_section in soup.find_all('h2'):
+    # Process each page section (marked by h2 tags) separately
+    page_sections = soup.find_all('h2')
+    
+    for section in page_sections:
+        # Get all paragraphs in this section
         paragraphs = []
-        current = page_section.find_next('p')
-        
-        while current and (not current.find_previous('h2') or current.find_previous('h2') == page_section):
+        current = section.find_next_sibling()
+        while current and current.name != 'h2':
             if current.name == 'p':
                 paragraphs.append(current)
-            current = current.find_next()
+            current = current.find_next_sibling()
         
-        # Combine paragraphs where appropriate
         i = 0
         while i < len(paragraphs) - 1:
             current_p = paragraphs[i]
             next_p = paragraphs[i + 1]
             
-            if should_combine_paragraphs(current_p.get_text(), next_p.get_text()):
-                # Add a space between combined text if needed
-                current_text = current_p.get_text().rstrip()
-                next_text = next_p.get_text().lstrip()
-                
-                # If both parts have content, add a space between them
-                if current_text and next_text:
-                    combined_text = current_text + ' ' + next_text
+            current_text = current_p.get_text().strip()
+            next_text = next_p.get_text().strip()
+            
+            print(f"\nChecking paragraphs:")
+            print(f"Current: '{current_text}'")
+            print(f"Next: '{next_text}'")
+            
+            # First check if we need to join a single letter with a word
+            should_join, joined_text = False, None
+            join_result = should_join_letter_with_word(current_text, next_text)
+            
+            if isinstance(join_result, tuple):
+                should_join, joined_text = join_result
+            else:
+                should_join = join_result
+            
+            if should_join:
+                print("Joining letter with word")
+                if joined_text:
+                    # Use the joined text if provided
+                    current_p.string = joined_text
                 else:
-                    combined_text = current_text + next_text
-                
-                current_p.string = combined_text
+                    # Otherwise combine current and next
+                    current_p.string = current_text + next_text
+                next_p.decompose()
+                paragraphs.pop(i + 1)
+                continue
+            
+            # Then check if paragraphs should be combined
+            if should_combine_paragraphs(current_text, next_text):
+                print("Combining paragraphs")
+                # Add a space between paragraphs when combining
+                current_p.string = current_text + " " + next_text
                 next_p.decompose()
                 paragraphs.pop(i + 1)
             else:
+                print("Not combining paragraphs")
                 i += 1
     
     return str(soup)
