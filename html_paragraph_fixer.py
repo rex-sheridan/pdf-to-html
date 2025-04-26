@@ -10,33 +10,57 @@ import sys
 from bs4 import BeautifulSoup
 import re
 
+def is_attribution_line(text):
+    """
+    Check if the text appears to be an attribution line (author, source, etc.)
+    """
+    # Match patterns like "—AUTHOR NAME, WORK, NUMBER" or "-AUTHOR NAME"
+    return bool(re.match(r'^[-—]\s*[A-Z\s,\.]+', text.strip()))
+
 def should_combine_paragraphs(current_text, next_text):
     """
     Determine if two paragraph texts should be combined based on various heuristics.
     """
-    if not current_text or not next_text:
+    if not current_text:
+        return True  # Empty paragraphs should be combined with the next one
+    
+    if not next_text:
+        return True  # Empty paragraphs should be combined with the previous one
+    
+    current_text = current_text.strip()
+    next_text = next_text.strip()
+    
+    # Don't combine if next text is an attribution line
+    if is_attribution_line(next_text):
         return False
-        
-    # Don't combine if current text ends with a clear sentence ending
-    if re.search(r'[.!?:]\s*$', current_text):
+    
+    # Don't combine if current text ends with a clear sentence ending AND next starts with a capital
+    if re.search(r'[.!?:]\s*$', current_text) and re.match(r'^[A-Z]', next_text):
+        # Exception: if the next text starts with common continuation words
+        continuation_words = r'^(said|continued|replied|added|explained|noted|suggested|mentioned|argued|concluded|wrote|stated|observed|remarked|responded)'
+        if re.match(continuation_words, next_text.lower()):
+            return True
         return False
-        
-    # Don't combine if next text starts with a capital letter and previous ends with period
-    if re.search(r'\.\s*$', current_text) and re.match(r'^[A-Z]', next_text):
-        return False
-        
+    
     # Don't combine if either paragraph is very short (likely a heading or title)
-    if len(current_text.strip()) < 20 or len(next_text.strip()) < 20:
+    # BUT allow combining if one is empty or very short (likely a formatting artifact)
+    if (len(current_text) >= 20 and len(next_text) >= 20) and (len(current_text.strip()) < 40 or len(next_text.strip()) < 40):
         return False
-        
+    
     # Combine if current text ends with a word that got cut off
     if re.search(r'[a-zA-Z]-\s*$', current_text):
         return True
-        
-    # Combine if current text doesn't end with punctuation and next doesn't start with capital
-    if not re.search(r'[.!?:]\s*$', current_text) and not re.match(r'^[A-Z]', next_text):
+    
+    # Combine if current text ends with a word that suggests continuation
+    continuation_indicators = r'(or|and|the|a|an|in|on|at|to|for|with|by|as|of|,)$'
+    if re.search(continuation_indicators, current_text.lower()):
         return True
-        
+    
+    # Combine if current text doesn't end with sentence-ending punctuation
+    # or if next text doesn't start with a capital letter
+    if not re.search(r'[.!?:]\s*$', current_text) or not re.match(r'^[A-Z]', next_text):
+        return True
+    
     return False
 
 def fix_paragraphs(html_content):
@@ -63,7 +87,15 @@ def fix_paragraphs(html_content):
             
             if should_combine_paragraphs(current_p.get_text(), next_p.get_text()):
                 # Add a space between combined text if needed
-                combined_text = current_p.get_text().rstrip() + ' ' + next_p.get_text().lstrip()
+                current_text = current_p.get_text().rstrip()
+                next_text = next_p.get_text().lstrip()
+                
+                # If both parts have content, add a space between them
+                if current_text and next_text:
+                    combined_text = current_text + ' ' + next_text
+                else:
+                    combined_text = current_text + next_text
+                
                 current_p.string = combined_text
                 next_p.decompose()
                 paragraphs.pop(i + 1)
